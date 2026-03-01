@@ -142,51 +142,39 @@ export function KanbanBoard() {
       return;
     }
 
-    const sourceColumn = data.columns[source.droppableId];
-    const destColumn = data.columns[destination.droppableId];
+    setData((prev) => {
+      const sourceColumn = prev.columns[source.droppableId];
+      const destColumn = prev.columns[destination.droppableId];
 
-    if (sourceColumn === destColumn) {
-      const newTaskIds = Array.from(sourceColumn.taskIds);
-      newTaskIds.splice(source.index, 1);
-      newTaskIds.splice(destination.index, 0, draggableId);
+      if (sourceColumn === destColumn) {
+        const newTaskIds = Array.from(sourceColumn.taskIds);
+        newTaskIds.splice(source.index, 1);
+        newTaskIds.splice(destination.index, 0, draggableId);
 
-      const newColumn = {
-        ...sourceColumn,
-        taskIds: newTaskIds,
-      };
+        return {
+          ...prev,
+          columns: {
+            ...prev.columns,
+            [sourceColumn.id]: { ...sourceColumn, taskIds: newTaskIds },
+          },
+        };
+      } else {
+        const sourceTaskIds = Array.from(sourceColumn.taskIds);
+        sourceTaskIds.splice(source.index, 1);
+        const destTaskIds = Array.from(destColumn.taskIds);
+        destTaskIds.splice(destination.index, 0, draggableId);
 
-      setData((prev) => ({
-        ...prev,
-        columns: {
-          ...prev.columns,
-          [newColumn.id]: newColumn,
-        },
-      }));
-    } else {
-      const sourceTaskIds = Array.from(sourceColumn.taskIds);
-      sourceTaskIds.splice(source.index, 1);
-      const newSourceColumn = {
-        ...sourceColumn,
-        taskIds: sourceTaskIds,
-      };
-
-      const destTaskIds = Array.from(destColumn.taskIds);
-      destTaskIds.splice(destination.index, 0, draggableId);
-      const newDestColumn = {
-        ...destColumn,
-        taskIds: destTaskIds,
-      };
-
-      setData((prev) => ({
-        ...prev,
-        columns: {
-          ...prev.columns,
-          [newSourceColumn.id]: newSourceColumn,
-          [newDestColumn.id]: newDestColumn,
-        },
-      }));
-    }
-  }, [data.columns]);
+        return {
+          ...prev,
+          columns: {
+            ...prev.columns,
+            [sourceColumn.id]: { ...sourceColumn, taskIds: sourceTaskIds },
+            [destColumn.id]: { ...destColumn, taskIds: destTaskIds },
+          },
+        };
+      }
+    });
+  }, []);
 
   return (
     <>

@@ -1,385 +1,455 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { use, useState, useRef, useCallback, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { DragDropContext, DropResult } from "@hello-pangea/dnd";
-import { Column } from "@/components/Column";
-import { DrawingPanel, Stroke } from "@/components/DrawingPanel";
+import {
+  useStorage,
+  useMutation,
+  useOthers,
+  useSelf,
+  useMyPresence,
+  RoomProvider,
+} from "@/liveblocks.config";
+import { Column as ColumnComponent } from "@/components/Column";
+import { DrawingPanel } from "@/components/DrawingPanel";
+import { CharacterIcon, DSTCharacter } from "@/components/DSTCharacters";
+import { CharacterSelect } from "@/components/CharacterSelect";
+import { LiveMap, LiveList } from "@liveblocks/client";
+import { ClientSideSuspense } from "@liveblocks/react";
 
-const STORAGE_PREFIX = "kanban-board-";
+type TaskItem   = { id: string; content: string };
+type ColumnType = { id: string; title: string; taskIds: string[] };
+type Stroke     = { points: { x: number; y: number }[]; color: string; width: number };
+type SaveFile   = { tasks: TaskItem[]; columns: ColumnType[]; columnOrder: string[] };
 
-const initialData = {
-  tasks: {
-    "task-1": { id: "task-1", content: "Gather berries" },
-    "task-2": { id: "task-2", content: "Chop trees" },
-    "task-3": { id: "task-3", content: "Build a fire" },
-  },
-  columns: {
-    "column-1": { id: "column-1", title: "To Do", taskIds: ["task-1", "task-2", "task-3"] },
-    "column-2": { id: "column-2", title: "Doing", taskIds: [] },
-    "column-3": { id: "column-3", title: "Done", taskIds: [] },
-  },
-  columnOrder: ["column-1", "column-2", "column-3"],
-  strokes: [] as Stroke[],
-};
+// ─── Board content (inside RoomProvider) ─────────────────────────────────────
 
-function loadFromStorage(boardId: string) {
-  if (typeof window === "undefined") return null;
-  try {
-    const saved = localStorage.getItem(STORAGE_PREFIX + boardId);
-    return saved ? JSON.parse(saved) : null;
-  } catch {
-    return null;
-  }
-}
+function BoardContent({ boardId }: { boardId: string }) {
+  const tasks       = useStorage((root) => root.tasks);
+  const columns     = useStorage((root) => root.columns);
+  const columnOrder = useStorage((root) => root.columnOrder);
+  const strokes     = useStorage((root) => root.strokes);
+  const others      = useOthers();
+  const self        = useSelf();
+  const [, updateMyPresence] = useMyPresence();
 
-function saveToStorage(boardId: string, data: any) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_PREFIX + boardId, JSON.stringify(data));
-  } catch {}
-}
-
-export default function BoardPage() {
-  const params = useParams();
-  const router = useRouter();
-  const boardId = params.id as string;
-  
-  const [data, setData] = useState<any>(initialData);
-  const [isOnline, setIsOnline] = useState(true);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [showExportModal, setShowExportModal] = useState(false);
-  const [exportData, setExportData] = useState("");
+  // ── Empty-room auto-close ──────────────────────────────────────────────────
+  const router      = useRouter();
+  const hadOthers   = useRef(false);           // becomes true once someone joins
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   useEffect(() => {
-    const saved = loadFromStorage(boardId);
-    if (saved) {
-      setData(saved);
+    if (others.length > 0) {
+      hadOthers.current = true;
+      setCountdown(null);                      // cancel any pending close
+    } else if (hadOthers.current) {
+      setCountdown(30);                        // start 30-second countdown
     }
-    setIsLoaded(true);
-    setIsOnline(navigator.onLine);
-  }, [boardId]);
+  }, [others.length]);
 
   useEffect(() => {
-    if (!isLoaded) return;
-    
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, [isLoaded]);
+    if (countdown === null) return;
+    if (countdown <= 0) { router.push("/"); return; }
+    const t = setTimeout(() => setCountdown((c) => (c !== null ? c - 1 : null)), 1000);
+    return () => clearTimeout(t);
+  }, [countdown, router]);
 
-  useEffect(() => {
-    if (!isLoaded) return;
-    saveToStorage(boardId, data);
-    setLastSaved(new Date());
-  }, [data, isLoaded, boardId]);
+  // Throttle cursor updates to ~20 fps
+  const lastCursorSend = useRef(0);
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const now = Date.now();
+    if (now - lastCursorSend.current < 50) return;
+    lastCursorSend.current = now;
+    updateMyPresence({ cursor: { x: e.clientX, y: e.clientY } });
+  }, [updateMyPresence]);
 
-  const onAddTask = useCallback((columnId: string, content: string) => {
+  const handleMouseLeave = useCallback(() => {
+    updateMyPresence({ cursor: null });
+  }, [updateMyPresence]);
+
+  // ── Mutations ──────────────────────────────────────────────────────────────
+
+  const addTask = useMutation(({ storage }, columnId: string, content: string) => {
     const taskId = `task-${Date.now()}`;
-    const newTask = { id: taskId, content };
-
-    setData((prev: any) => ({
-      ...prev,
-      tasks: {
-        ...prev.tasks,
-        [taskId]: newTask,
-      },
-      columns: {
-        ...prev.columns,
-        [columnId]: {
-          ...prev.columns[columnId],
-          taskIds: [...prev.columns[columnId].taskIds, taskId],
-        },
-      },
-    }));
+    storage.get("tasks").set(taskId, { id: taskId, content });
+    const col = storage.get("columns").get(columnId);
+    if (col) storage.get("columns").set(columnId, { ...col, taskIds: [...col.taskIds, taskId] });
   }, []);
 
-  const onDeleteTask = useCallback((taskId: string) => {
-    setData((prev: any) => {
-      const newTasks = { ...prev.tasks };
-      delete newTasks[taskId];
-
-      const newColumns = { ...prev.columns };
-      for (const columnId in newColumns) {
-        newColumns[columnId] = {
-          ...newColumns[columnId],
-          taskIds: newColumns[columnId].taskIds.filter((id: string) => id !== taskId),
-        };
-      }
-
-      return {
-        ...prev,
-        tasks: newTasks,
-        columns: newColumns,
-      };
-    });
+  const deleteTask = useMutation(({ storage }, taskId: string) => {
+    storage.get("tasks").delete(taskId);
+    for (const colId of Array.from(storage.get("columns").keys())) {
+      const col = storage.get("columns").get(colId);
+      if (col) storage.get("columns").set(colId, { ...col, taskIds: col.taskIds.filter((id: string) => id !== taskId) });
+    }
   }, []);
 
-  const handleStrokeAdd = useCallback((stroke: Stroke) => {
-    setData((prev: any) => ({
-      ...prev,
-      strokes: [...(prev.strokes || []), stroke],
-    }));
-  }, []);
-
-  const handleClearStrokes = useCallback(() => {
-    setData((prev: any) => ({
-      ...prev,
-      strokes: [],
-    }));
-  }, []);
-
-  const handleAddSketchAsNote = useCallback((dataUrl: string) => {
-    const taskId = `task-${Date.now()}`;
-    const newTask = { id: taskId, content: dataUrl };
-
-    setData((prev: any) => ({
-      ...prev,
-      tasks: {
-        ...prev.tasks,
-        [taskId]: newTask,
-      },
-      columns: {
-        ...prev.columns,
-        "column-1": {
-          ...prev.columns["column-1"],
-          taskIds: [taskId, ...prev.columns["column-1"].taskIds],
-        },
-      },
-    }));
-  }, []);
-
-  const onDragEnd = useCallback((result: DropResult) => {
+  const moveTask = useMutation(({ storage }, result: DropResult) => {
     const { destination, source, draggableId } = result;
-
     if (!destination) return;
-
-    if (
-      destination.droppableId === source.droppableId &&
-      destination.index === source.index
-    ) {
-      return;
+    if (destination.droppableId === source.droppableId && destination.index === source.index) return;
+    const src  = storage.get("columns").get(source.droppableId);
+    const dest = storage.get("columns").get(destination.droppableId);
+    if (!src || !dest) return;
+    if (src.id === dest.id) {
+      const ids = [...src.taskIds];
+      ids.splice(source.index, 1);
+      ids.splice(destination.index, 0, draggableId);
+      storage.get("columns").set(src.id, { ...src, taskIds: ids });
+    } else {
+      const srcIds  = [...src.taskIds];  srcIds.splice(source.index, 1);
+      const destIds = [...dest.taskIds]; destIds.splice(destination.index, 0, draggableId);
+      storage.get("columns").set(src.id,  { ...src,  taskIds: srcIds });
+      storage.get("columns").set(dest.id, { ...dest, taskIds: destIds });
     }
-
-    setData((prev: any) => {
-      const sourceColumn = prev.columns[source.droppableId];
-      const destColumn = prev.columns[destination.droppableId];
-
-      if (sourceColumn.id === destColumn.id) {
-        const newTaskIds = [...sourceColumn.taskIds];
-        newTaskIds.splice(source.index, 1);
-        newTaskIds.splice(destination.index, 0, draggableId);
-
-        return {
-          ...prev,
-          columns: {
-            ...prev.columns,
-            [sourceColumn.id]: {
-              ...sourceColumn,
-              taskIds: newTaskIds,
-            },
-          },
-        };
-      } else {
-        const sourceTaskIds = [...sourceColumn.taskIds];
-        sourceTaskIds.splice(source.index, 1);
-
-        const destTaskIds = [...destColumn.taskIds];
-        destTaskIds.splice(destination.index, 0, draggableId);
-
-        return {
-          ...prev,
-          columns: {
-            ...prev.columns,
-            [sourceColumn.id]: {
-              ...sourceColumn,
-              taskIds: sourceTaskIds,
-            },
-            [destColumn.id]: {
-              ...destColumn,
-              taskIds: destTaskIds,
-            },
-          },
-        };
-      }
-    });
   }, []);
 
-  const handleExport = () => {
-    const exportObj = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      data: data,
+  const addStroke = useMutation(({ storage }, stroke: Stroke) => {
+    storage.get("strokes").push(stroke);
+  }, []);
+
+  const clearStrokes = useMutation(({ storage }) => {
+    const list = storage.get("strokes");
+    while (list.length > 0) list.delete(0);
+  }, []);
+
+  const addSketchAsNote = useMutation(({ storage }, dataUrl: string) => {
+    const taskId = `task-${Date.now()}`;
+    storage.get("tasks").set(taskId, { id: taskId, content: dataUrl });
+    const col = storage.get("columns").get("column-1");
+    if (col) storage.get("columns").set("column-1", { ...col, taskIds: [taskId, ...col.taskIds] });
+  }, []);
+
+  // ── Import mutation ────────────────────────────────────────────────────────
+
+  const importBoard = useMutation(({ storage }, data: SaveFile) => {
+    // Overwrite tasks
+    const tasksMap = storage.get("tasks");
+    for (const k of Array.from(tasksMap.keys())) tasksMap.delete(k);
+    for (const t of data.tasks) tasksMap.set(t.id, t);
+    // Overwrite columns
+    const colsMap = storage.get("columns");
+    for (const k of Array.from(colsMap.keys())) colsMap.delete(k);
+    for (const c of data.columns) colsMap.set(c.id, c);
+    // Overwrite column order
+    const colOrder = storage.get("columnOrder");
+    while (colOrder.length > 0) colOrder.delete(0);
+    for (const id of data.columnOrder) colOrder.push(id);
+  }, []);
+
+  // ── Export ─────────────────────────────────────────────────────────────────
+
+  const handleExport = useCallback(() => {
+    if (!tasks || !columns || !columnOrder) return;
+    const data: SaveFile = {
+      tasks:       Array.from(tasks.values()),
+      columns:     Array.from(columns.values()),
+      columnOrder: Array.from(columnOrder),
     };
-    const json = JSON.stringify(exportObj, null, 2);
-    setExportData(json);
-    setShowExportModal(true);
-  };
-
-  const handleImport = () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          try {
-            const imported = JSON.parse(event.target?.result as string);
-            if (imported.data && imported.data.tasks && imported.data.columns) {
-              setData(imported.data);
-            } else {
-              alert("Invalid board file");
-            }
-          } catch {
-            alert("Failed to parse file");
-          }
-        };
-        reader.readAsText(file);
-      }
-    };
-    input.click();
-  };
-
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(exportData);
-  };
-
-  const downloadJson = () => {
-    const blob = new Blob([exportData], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `kanban-board-${boardId}.json`;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `dst-kanban-${boardId}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  };
+  }, [tasks, columns, columnOrder, boardId]);
 
-  if (!data) {
+  // ── Import ─────────────────────────────────────────────────────────────────
+
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const handleImportFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string) as SaveFile;
+        if (!data.tasks || !data.columns || !data.columnOrder) throw new Error("Invalid save file");
+        importBoard(data);
+      } catch {
+        alert("Invalid save file. Please choose a valid DST Kanban save.");
+      }
+    };
+    reader.readAsText(file);
+    // reset so the same file can be re-imported
+    e.target.value = "";
+  }, [importBoard]);
+
+  // ── Guard ──────────────────────────────────────────────────────────────────
+
+  if (!tasks || !columns || !columnOrder || !strokes) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-[#c9b896]">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-[#0d0b06]">
+        <div className="text-[#c9b896]">Loading board...</div>
       </div>
     );
   }
 
-  return (
-    <>
-      <div className="min-h-screen">
-        <header className="border-b border-[#4a3f32] px-6 py-4 bg-[#1f1a15] flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push("/")}
-              className="text-[#8b7355] hover:text-[#c9b896] transition-colors text-sm"
-            >
-              ← Home
-            </button>
-            <h1 className="text-xl font-bold tracking-wider text-[#c9b896] uppercase" style={{ textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
-              Board: {boardId}
-            </h1>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleImport}
-              className="px-3 py-1.5 bg-[#3d332a] text-[#c9b896] text-sm rounded border border-[#4a3f32] hover:border-[#8b6914] transition-colors"
-            >
-              Import
-            </button>
-            <button
-              onClick={handleExport}
-              className="px-3 py-1.5 bg-[#3d332a] text-[#c9b896] text-sm rounded border border-[#4a3f32] hover:border-[#8b6914] transition-colors"
-            >
-              Export
-            </button>
-          </div>
-        </header>
+  const tasksObj       = Object.fromEntries(tasks.entries());
+  const columnsObj     = Object.fromEntries(columns.entries());
+  const columnOrderArr = Array.from(columnOrder);
+  const strokesArr     = Array.from(strokes);
 
-        <div className="fixed bottom-4 right-4 z-50">
-          {lastSaved && (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-gray-900/80 backdrop-blur-sm text-gray-300 border border-gray-700 shadow-sm">
-              {isOnline ? (
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-green-600 text-white text-xs font-medium">
-                  Online
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-amber-600 text-white text-xs font-medium">
-                  Offline
-                </span>
-              )}
-              <span className="ml-2 text-xs font-medium text-gray-400">• {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            </span>
-          )}
+  const myCharId = self?.presence.characterId ?? "wilson";
+  const myColor  = self?.presence.color       ?? "#888";
+  const myName   = self?.presence.name        ?? "You";
+
+  return (
+    <div className="min-h-screen bg-[#0d0b06]" onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}>
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <header
+        className="px-4 py-2 flex items-center justify-between border-b"
+        style={{ backgroundColor: "#0f0c07", borderColor: "#2a221a" }}
+      >
+        {/* Left: title + board ID */}
+        <div className="flex items-center gap-3">
+          <span
+            className="text-[#c9a96e] font-bold tracking-widest text-sm uppercase"
+            style={{ fontFamily: "Georgia, serif", textShadow: "0 0 10px rgba(201,169,110,0.3)" }}
+          >
+            Don&apos;t Starve Together
+          </span>
+          <span className="text-[#2a221a] text-xs">|</span>
+          <span className="text-[#4a3f32] text-xs font-mono">{boardId}</span>
         </div>
 
-        <DragDropContext onDragEnd={onDragEnd}>
-          <div className="flex gap-6 p-6 overflow-x-auto min-h-[calc(100vh-100px)]">
-            {data.columnOrder.map((columnId: string) => {
-              const column = data.columns[columnId];
-              const tasks = column.taskIds.map((taskId: string) => data.tasks[taskId]);
-
-              return (
-                <Column
-                  key={column.id}
-                  column={column}
-                  tasks={tasks}
-                  onAddTask={onAddTask}
-                  onDeleteTask={onDeleteTask}
-                />
-              );
-            })}
-            <DrawingPanel 
-              strokes={data.strokes || []} 
-              onStrokeAdd={handleStrokeAdd}
-              onClear={handleClearStrokes}
-              onAddAsNote={handleAddSketchAsNote}
-            />
+        {/* Right: save/load + avatars */}
+        <div className="flex items-center gap-3">
+          {/* Export / Import */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleExport}
+              className="px-2 py-1 text-xs rounded border transition-all hover:scale-105 active:scale-95"
+              style={{ backgroundColor: "#110e08", borderColor: "#3a3028", color: "#8b7355" }}
+              title="Export board as save file"
+            >
+              Export Save
+            </button>
+            <button
+              onClick={() => importRef.current?.click()}
+              className="px-2 py-1 text-xs rounded border transition-all hover:scale-105 active:scale-95"
+              style={{ backgroundColor: "#110e08", borderColor: "#3a3028", color: "#8b7355" }}
+              title="Import board from save file"
+            >
+              Import Save
+            </button>
+            <input ref={importRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
           </div>
-        </DragDropContext>
-      </div>
 
-      {showExportModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#2a231c] border border-[#4a3f32] rounded-lg p-4 w-full max-w-lg">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-[#c9b896]">Export Board</h3>
-              <button
-                onClick={() => setShowExportModal(false)}
-                className="text-[#8b7355] hover:text-[#c9b896]"
+          {/* Avatar stack */}
+          <div className="flex items-center gap-2">
+            <div className="flex -space-x-2">
+              <div
+                className="w-8 h-8 rounded-full border overflow-hidden"
+                style={{ borderColor: myColor }}
+                title={`${myName} (you)`}
               >
-                ✕
-              </button>
+                <CharacterIcon characterId={myCharId} size={32} />
+              </div>
+              {others.slice(0, 6).map((other) => (
+                <div
+                  key={other.connectionId}
+                  className="w-8 h-8 rounded-full border overflow-hidden"
+                  style={{ borderColor: other.presence.color || "#888" }}
+                  title={other.presence.name || "Unknown"}
+                >
+                  <CharacterIcon characterId={other.presence.characterId || "wilson"} size={32} />
+                </div>
+              ))}
             </div>
-            <textarea
-              value={exportData}
-              readOnly
-              className="w-full h-48 bg-[#1a1612] border border-[#4a3f32] rounded p-2 text-[#c9b896] text-xs font-mono resize-none"
-            />
-            <div className="flex gap-2 mt-4">
-              <button
-                onClick={copyToClipboard}
-                className="flex-1 px-4 py-2 bg-[#8b6914] text-[#1a1612] rounded font-medium hover:bg-[#a67c16] transition-colors"
-              >
-                Copy to Clipboard
-              </button>
-              <button
-                onClick={downloadJson}
-                className="flex-1 px-4 py-2 bg-[#3d332a] text-[#c9b896] border border-[#4a3f32] rounded font-medium hover:border-[#8b6914] transition-colors"
-              >
-                Download JSON
-              </button>
+            <div className="text-right hidden sm:block">
+              <div className="text-xs font-semibold leading-none" style={{ color: myColor }}>{myName}</div>
+              <div className="text-[10px] text-[#3a3028] leading-none mt-0.5">
+                {others.length > 0 ? `+${others.length} online` : "alone in the dark"}
+              </div>
             </div>
+          </div>
+        </div>
+      </header>
+
+      {/* ── Remote cursors ─────────────────────────────────────────────────── */}
+      {others.map((other) =>
+        other.presence?.cursor ? (
+          <div
+            key={other.connectionId}
+            className="fixed pointer-events-none z-50"
+            style={{
+              left: 0,
+              top: 0,
+              transform: `translate(${other.presence.cursor.x}px, ${other.presence.cursor.y}px)`,
+              transition: "transform 60ms linear",
+              willChange: "transform",
+            }}
+          >
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+              <path
+                d="M4 2L18 10L11 12L8.5 19L4 2Z"
+                fill={other.presence.color || "#888"}
+                stroke="#0d0b06"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <div
+              className="absolute flex items-center gap-1 rounded px-1.5 py-0.5 shadow-lg whitespace-nowrap"
+              style={{ left: 16, top: 14, backgroundColor: other.presence.color || "#888" }}
+            >
+              <div className="w-4 h-4 rounded-full overflow-hidden bg-black/20 shrink-0">
+                <CharacterIcon characterId={other.presence.characterId || "wilson"} size={16} />
+              </div>
+              <span className="text-[11px] font-bold text-black leading-none">
+                {other.presence.name || "Unknown"}
+              </span>
+            </div>
+          </div>
+        ) : null
+      )}
+
+      {/* ── Kanban columns ─────────────────────────────────────────────────── */}
+      <DragDropContext onDragEnd={moveTask}>
+        <div className="flex gap-6 p-6 overflow-x-auto min-h-[calc(100vh-49px)]">
+          {columnOrderArr.map((columnId) => {
+            const column      = columnsObj[columnId];
+            const columnTasks = column.taskIds.map((tid) => tasksObj[tid]).filter(Boolean);
+            return (
+              <ColumnComponent
+                key={column.id}
+                column={column}
+                tasks={columnTasks}
+                onAddTask={addTask}
+                onDeleteTask={deleteTask}
+              />
+            );
+          })}
+          <DrawingPanel
+            strokes={strokesArr}
+            onStrokeAdd={addStroke}
+            onClear={clearStrokes}
+            onAddAsNote={addSketchAsNote}
+          />
+        </div>
+      </DragDropContext>
+
+      {/* ── Empty-room overlay ─────────────────────────────────────────────── */}
+      {countdown !== null && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center"
+          style={{ backgroundColor: "rgba(0,0,0,0.85)", backdropFilter: "blur(4px)" }}
+        >
+          <div
+            className="flex flex-col items-center gap-5 rounded-xl border p-10 text-center max-w-sm w-full"
+            style={{ backgroundColor: "#0f0c07", borderColor: "#3a2a10" }}
+          >
+            {/* Skull / ghost icon */}
+            <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+              <circle cx="28" cy="24" r="18" fill="#1a1410" stroke="#4a3a1a" strokeWidth="1.5" />
+              <circle cx="22" cy="22" r="4" fill="#c9a96e" opacity="0.8" />
+              <circle cx="34" cy="22" r="4" fill="#c9a96e" opacity="0.8" />
+              <path d="M20 32 L22 36 L24 32 L28 36 L32 32 L34 36 L36 32" stroke="#4a3a1a" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+              <path d="M18 42 Q28 50 38 42" stroke="#c9a96e" strokeWidth="1" strokeDasharray="2,3" fill="none" opacity="0.4" />
+            </svg>
+
+            <div>
+              <h2
+                className="text-xl font-bold text-[#c9a96e] tracking-widest uppercase mb-1"
+                style={{ fontFamily: "Georgia, serif", textShadow: "0 0 12px rgba(201,169,110,0.4)" }}
+              >
+                All Survivors Have Perished
+              </h2>
+              <p className="text-[#6a5a3a] text-sm">
+                The wilderness claims the empty camp...
+              </p>
+            </div>
+
+            {/* Countdown bar */}
+            <div className="w-full">
+              <div className="flex justify-between text-xs text-[#4a3a1a] mb-1.5">
+                <span>Returning to camp</span>
+                <span className="font-mono text-[#8b7355]">{countdown}s</span>
+              </div>
+              <div className="w-full h-2 rounded-full overflow-hidden" style={{ backgroundColor: "#1a1410" }}>
+                <div
+                  className="h-full rounded-full transition-all duration-1000 ease-linear"
+                  style={{
+                    width: `${(countdown / 30) * 100}%`,
+                    background: "linear-gradient(90deg, #5a3c10, #c9a96e)",
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Stay button */}
+            <button
+              onClick={() => { hadOthers.current = false; setCountdown(null); }}
+              className="px-6 py-2 text-sm font-bold uppercase tracking-widest rounded-lg border transition-all hover:scale-105 active:scale-95"
+              style={{
+                backgroundColor: "#1a1410",
+                borderColor: "#3a2a10",
+                color: "#8b7355",
+                fontFamily: "Georgia, serif",
+              }}
+            >
+              Stay in the Dark
+            </button>
           </div>
         </div>
       )}
-    </>
+    </div>
+  );
+}
+
+// ─── Page entry ───────────────────────────────────────────────────────────────
+
+export default function BoardPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+
+  const [character, setCharacter] = useState<DSTCharacter | null>(null);
+
+  // Fresh LiveMap/LiveList per page mount → each board ID is isolated
+  const [initialStorage] = useState(() => ({
+    tasks: new LiveMap<string, TaskItem>([
+      ["task-1", { id: "task-1", content: "Gather berries" }],
+      ["task-2", { id: "task-2", content: "Chop trees" }],
+      ["task-3", { id: "task-3", content: "Build a fire" }],
+    ]),
+    columns: new LiveMap<string, ColumnType>([
+      ["column-1", { id: "column-1", title: "To Do",  taskIds: ["task-1", "task-2", "task-3"] }],
+      ["column-2", { id: "column-2", title: "Doing",  taskIds: [] }],
+      ["column-3", { id: "column-3", title: "Done",   taskIds: [] }],
+    ]),
+    columnOrder: new LiveList<string>(["column-1", "column-2", "column-3"]),
+    strokes: new LiveList<Stroke>([]),
+  }));
+
+  // Show character select before connecting to the room
+  if (!character) {
+    return <CharacterSelect boardId={id} onSelect={setCharacter} />;
+  }
+
+  return (
+    <RoomProvider
+      id={`kanban-board-${id}`}
+      initialPresence={{
+        cursor:      null,
+        name:        character.name,
+        color:       character.color,
+        characterId: character.id,
+      }}
+      initialStorage={initialStorage}
+    >
+      <ClientSideSuspense
+        fallback={
+          <div className="min-h-screen flex items-center justify-center bg-[#0d0b06]">
+            <div className="text-[#c9b896]">Venturing forth...</div>
+          </div>
+        }
+      >
+        {() => <BoardContent boardId={id} />}
+      </ClientSideSuspense>
+    </RoomProvider>
   );
 }

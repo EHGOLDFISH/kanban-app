@@ -1,19 +1,39 @@
-import { createClient } from "@liveblocks/client";
+import { createClient, LiveMap, LiveList, LiveObject } from "@liveblocks/client";
 import { createRoomContext } from "@liveblocks/react";
 
 const client = createClient({
-  publicApiKey: process.env.NEXT_PUBLIC_LIVEBLOCKS_PUBLIC_KEY || "",
+  publicApiKey: process.env.NEXT_PUBLIC_LIVEBLOCKS_PUBLIC_KEY!,
 });
+
+type TaskItem = {
+  id: string;
+  content: string;
+};
+
+type ColumnType = {
+  id: string;
+  title: string;
+  taskIds: string[];
+};
+
+type Stroke = {
+  points: { x: number; y: number }[];
+  color: string;
+  width: number;
+};
 
 type Presence = {
   cursor: { x: number; y: number } | null;
-  draggingTaskId: string | null;
+  name: string;
+  color: string;
+  characterId: string;
 };
 
 type Storage = {
-  tasks: Record<string, { id: string; content: string }>;
-  columns: Record<string, { id: string; title: string; taskIds: string[] }>;
-  columnOrder: string[];
+  tasks: LiveMap<string, TaskItem>;
+  columns: LiveMap<string, ColumnType>;
+  columnOrder: LiveList<string>;
+  strokes: LiveList<Stroke>;
 };
 
 type UserMeta = {
@@ -24,11 +44,17 @@ type UserMeta = {
   };
 };
 
+type RoomEvent = never;
+
 export const {
   RoomProvider,
-  useMyPresence,
   useOthers,
   useSelf,
   useStorage,
   useMutation,
-} = createRoomContext<Presence, Storage, UserMeta>(client);
+  useRoom,
+  useMyPresence,
+  useBroadcastEvent,
+} = createRoomContext<Presence, Storage, UserMeta, RoomEvent>(client);
+
+export type { TaskItem, ColumnType, Stroke, Presence };
