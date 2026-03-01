@@ -24,15 +24,18 @@ function StatBar({ label, value, max, color }: { label: string; value: number; m
   );
 }
 
-// Simple star field rendered once
-const STARS = Array.from({ length: 80 }, (_, i) => ({
-  id: i,
-  x: Math.random() * 100,
-  y: Math.random() * 100,
-  r: Math.random() * 1.5 + 0.5,
-  opacity: Math.random() * 0.6 + 0.2,
-  delay: Math.random() * 3,
-}));
+// Deterministic star field — same values on server and client (no hydration mismatch)
+const STARS = Array.from({ length: 80 }, (_, i) => {
+  const t = (i * 2.399963) % (Math.PI * 2);
+  return {
+    id: i,
+    x: ((Math.cos(t * 3.7) + 1) / 2) * 100,
+    y: ((Math.sin(t * 2.1) + 1) / 2) * 90,
+    r: i % 3 === 0 ? 1.5 : i % 2 === 0 ? 1 : 0.6,
+    opacity: 0.15 + (i % 5) * 0.12,
+    delay: (i % 7) * 0.4,
+  };
+});
 
 export function CharacterSelect({ boardId, onSelect }: Props) {
   const [hovered, setHovered]   = useState<DSTCharacter | null>(null);
