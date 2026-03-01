@@ -9,9 +9,10 @@ interface ColumnProps {
   column: ColumnType;
   tasks: Task[];
   onAddTask: (columnId: string, content: string) => void;
+  onDeleteTask: (taskId: string) => void;
 }
 
-export function Column({ column, tasks, onAddTask }: ColumnProps) {
+export function Column({ column, tasks, onAddTask, onDeleteTask }: ColumnProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [newTaskContent, setNewTaskContent] = useState("");
 
@@ -50,7 +51,7 @@ export function Column({ column, tasks, onAddTask }: ColumnProps) {
             }`}
           >
             {tasks.map((task, index) => (
-              <TaskCard key={task.id} task={task} index={index} />
+              <TaskCard key={task.id} task={task} index={index} onDelete={onDeleteTask} />
             ))}
             {provided.placeholder}
             
