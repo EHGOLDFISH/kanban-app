@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:dontstarve.wiki.gg)"
+      "WebFetch(domain:dontstarve.wiki.gg)",
+      "WebFetch(domain:dontstarve.fandom.com)"
     ]
   }
 }

@@ -27,10 +27,11 @@ function StatBar({ label, value, max, color }: { label: string; value: number; m
 // Deterministic star field — same values on server and client (no hydration mismatch)
 const STARS = Array.from({ length: 80 }, (_, i) => {
   const t = (i * 2.399963) % (Math.PI * 2);
+  const round4 = (n: number) => Math.round(n * 10000) / 10000;
   return {
     id: i,
-    x: ((Math.cos(t * 3.7) + 1) / 2) * 100,
-    y: ((Math.sin(t * 2.1) + 1) / 2) * 90,
+    x: round4(((Math.cos(t * 3.7) + 1) / 2) * 100),
+    y: round4(((Math.sin(t * 2.1) + 1) / 2) * 90),
     r: i % 3 === 0 ? 1.5 : i % 2 === 0 ? 1 : 0.6,
     opacity: 0.15 + (i % 5) * 0.12,
     delay: (i % 7) * 0.4,
@@ -40,8 +41,23 @@ const STARS = Array.from({ length: 80 }, (_, i) => {
 export function CharacterSelect({ boardId, onSelect }: Props) {
   const [hovered, setHovered]   = useState<DSTCharacter | null>(null);
   const [selected, setSelected] = useState<DSTCharacter | null>(null);
+  const [isRandom, setIsRandom] = useState(false);
 
-  const displayed = hovered ?? selected;
+  // When random is picked and nothing is hovered, show the "?" placeholder — not the chosen character
+  const RANDOM_PLACEHOLDER: DSTCharacter = { id: "__random__", name: "Random", color: "#c9a96e", portrait: "", quote: "", perk: "", health: 0, hunger: 0, sanity: 0 };
+  const displayed = hovered ?? (isRandom ? RANDOM_PLACEHOLDER : selected);
+
+  function pickRandom() {
+    const pick = DST_CHARACTERS[Math.floor(Math.random() * DST_CHARACTERS.length)];
+    setSelected(pick);
+    setIsRandom(true);
+    setHovered(null);
+  }
+
+  function handleSelect(char: DSTCharacter) {
+    setSelected(char);
+    setIsRandom(false);
+  }
 
   return (
     <div
@@ -111,49 +127,58 @@ export function CharacterSelect({ boardId, onSelect }: Props) {
 
       {/* ── Character grid ─────────────────────────────────────────────────── */}
       <div className="relative z-10 flex-1 flex flex-col items-center px-4 pb-4">
-        <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 sm:gap-3 mb-4 w-full max-w-3xl">
+        <div className="grid grid-cols-5 sm:grid-cols-7 gap-1.5 sm:gap-2 mb-4 w-full max-w-4xl">
+
+          {/* Random Survivor card */}
+          {(() => {
+            const isRandomSelected = isRandom && selected !== null;
+            const isRandomHovered  = hovered?.id === "__random__";
+            return (
+              <button
+                onClick={pickRandom}
+                onMouseEnter={() => setHovered({ id: "__random__", name: "Random", color: "#c9a96e", portrait: "", quote: "", perk: "", health: 0, hunger: 0, sanity: 0 })}
+                onMouseLeave={() => setHovered(null)}
+                className="rounded-lg border overflow-hidden focus:outline-none transition-all duration-150"
+                style={{
+                  backgroundColor: isRandomSelected ? "#1f180e" : "#110e08",
+                  borderColor: isRandomSelected ? "#c9a96e" : isRandomHovered ? "#6a5a3a" : "#2a221a",
+                  boxShadow: isRandomSelected ? "0 0 14px #c9a96e55, 0 0 28px #c9a96e22" : "none",
+                  transform: isRandomSelected || isRandomHovered ? "scale(1.06)" : "scale(1)",
+                  aspectRatio: "3 / 4",
+                }}
+                title="Pick a random survivor"
+              >
+                <img
+                  src="/characters/Random_Character_Portrait.webp"
+                  alt="Random Survivor"
+                  style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top center", display: "block" }}
+                />
+              </button>
+            );
+          })()}
+
+          {/* Character cards */}
           {DST_CHARACTERS.map((char) => {
-            const isSelected = selected?.id === char.id;
-            const isHovered  = hovered?.id  === char.id;
+            const isSelected = !isRandom && selected?.id === char.id;
+            const isHovered  = hovered?.id === char.id;
             return (
               <button
                 key={char.id}
-                onClick={() => setSelected(char)}
+                onClick={() => handleSelect(char)}
                 onMouseEnter={() => setHovered(char)}
                 onMouseLeave={() => setHovered(null)}
-                className="flex flex-col items-center gap-1.5 p-2 rounded-lg border transition-all duration-150 focus:outline-none"
+                className="rounded-lg border overflow-hidden focus:outline-none transition-all duration-150"
                 style={{
-                  backgroundColor: isSelected ? "#1f180e" : isHovered ? "#18130a" : "#110e08",
-                  borderColor: isSelected
-                    ? char.color
-                    : isHovered
-                    ? "#6a5a3a"
-                    : "#2a221a",
+                  backgroundColor: isSelected ? "#1f180e" : "#110e08",
+                  borderColor: isSelected ? char.color : isHovered ? "#6a5a3a" : "#2a221a",
                   boxShadow: isSelected
-                    ? `0 0 12px ${char.color}55, 0 0 24px ${char.color}22`
-                    : isHovered
-                    ? "0 0 6px rgba(201,169,110,0.15)"
-                    : "none",
+                    ? `0 0 14px ${char.color}55, 0 0 28px ${char.color}22`
+                    : isHovered ? "0 0 6px rgba(201,169,110,0.15)" : "none",
                   transform: isSelected || isHovered ? "scale(1.06)" : "scale(1)",
+                  aspectRatio: "3 / 4",
                 }}
               >
-                <div
-                  className="rounded-lg overflow-hidden p-1"
-                  style={{ backgroundColor: `${char.color}18` }}
-                >
-                  <CharacterIcon characterId={char.id} size={52} />
-                </div>
-                <span
-                  className="text-[10px] font-semibold tracking-wide text-center leading-tight"
-                  style={{ color: isSelected ? char.color : "#8b7355" }}
-                >
-                  {char.name}
-                </span>
-                {isSelected && (
-                  <span className="text-[8px] tracking-widest uppercase" style={{ color: char.color }}>
-                    ▼ Selected
-                  </span>
-                )}
+                <CharacterIcon characterId={char.id} size={0} />
               </button>
             );
           })}
@@ -169,7 +194,18 @@ export function CharacterSelect({ boardId, onSelect }: Props) {
             minHeight: "120px",
           }}
         >
-          {displayed ? (
+          {displayed?.id === "__random__" ? (
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="shrink-0 rounded-lg overflow-hidden self-start" style={{ backgroundColor: "#c9a96e18", border: "1px solid #c9a96e44", width: 72, height: 96 }}>
+                <img src="/characters/Random_Character_Portrait.webp" alt="Random" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top center", display: "block" }} />
+              </div>
+              <div className="flex-1 flex flex-col justify-center gap-1">
+                <h2 className="text-xl font-bold tracking-wider uppercase" style={{ color: "#c9a96e", fontFamily: "Georgia, serif", textShadow: "0 0 10px #c9a96e66" }}>Random</h2>
+                <span className="text-[#5a4d3d] text-xs italic">Mystery Survivor</span>
+                <p className="text-[#8b7355] text-sm italic mt-1">Your fate is chosen for you.<br />A random survivor will be selected.</p>
+              </div>
+            </div>
+          ) : displayed ? (
             <div className="flex flex-col sm:flex-row gap-4">
               {/* Portrait */}
               <div
@@ -216,16 +252,18 @@ export function CharacterSelect({ boardId, onSelect }: Props) {
           className="px-10 py-3 text-base font-bold uppercase tracking-widest rounded-lg transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
           style={{
             background: selected
-              ? `linear-gradient(135deg, #5a3c10, ${selected.color}cc, #5a3c10)`
+              ? `linear-gradient(135deg, #5a3c10, ${isRandom ? "#c9a96e" : selected.color}cc, #5a3c10)`
               : "#1a1410",
             color: selected ? "#0d0b06" : "#3a3028",
-            border: selected ? `2px solid ${selected.color}` : "2px solid #2a221a",
-            boxShadow: selected ? `0 0 20px ${selected.color}44, 0 4px 12px rgba(0,0,0,0.6)` : "none",
+            border: selected ? `2px solid ${isRandom ? "#c9a96e" : selected.color}` : "2px solid #2a221a",
+            boxShadow: selected ? `0 0 20px ${isRandom ? "#c9a96e" : selected.color}44, 0 4px 12px rgba(0,0,0,0.6)` : "none",
             transform: selected ? "scale(1.02)" : "scale(1)",
             fontFamily: "Georgia, serif",
           }}
         >
-          {selected ? `Venture Forth as ${selected.name}` : "Select a Survivor"}
+          {selected
+            ? isRandom ? "Venture Forth into the Unknown" : `Venture Forth as ${selected.name}`
+            : "Select a Survivor"}
         </button>
       </div>
 
