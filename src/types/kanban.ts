@@ -1,6 +1,13 @@
+export interface TaskAssignee {
+  name: string;
+  characterId: string;
+  color: string;
+}
+
 export interface Task {
   id: string;
   content: string;
+  assignedTo?: TaskAssignee;
 }
 
 export interface Column {

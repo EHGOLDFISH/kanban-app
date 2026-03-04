@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Droppable } from "@hello-pangea/dnd";
-import { Column as ColumnType, Task } from "@/types/kanban";
+import { Column as ColumnType, Task, TaskAssignee } from "@/types/kanban";
 import { TaskCard } from "./TaskCard";
 
 interface ColumnProps {
@@ -12,9 +12,10 @@ interface ColumnProps {
   onDeleteTask: (taskId: string) => void;
   onEditTask: (taskId: string, newContent: string) => void;
   onEditImage: (taskId: string) => void;
+  onAssignTask: (taskId: string, assignee: TaskAssignee | null) => void;
 }
 
-export function Column({ column, tasks, onAddTask, onDeleteTask, onEditTask, onEditImage }: ColumnProps) {
+export function Column({ column, tasks, onAddTask, onDeleteTask, onEditTask, onEditImage, onAssignTask }: ColumnProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [newTaskContent, setNewTaskContent] = useState("");
 
@@ -53,7 +54,7 @@ export function Column({ column, tasks, onAddTask, onDeleteTask, onEditTask, onE
             }`}
           >
             {tasks.map((task, index) => (
-              <TaskCard key={task.id} task={task} index={index} onDelete={onDeleteTask} onEdit={onEditTask} onEditImage={onEditImage} />
+              <TaskCard key={task.id} task={task} index={index} onDelete={onDeleteTask} onEdit={onEditTask} onEditImage={onEditImage} onAssign={onAssignTask} />
             ))}
             {provided.placeholder}
             

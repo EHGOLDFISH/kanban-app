@@ -18,7 +18,8 @@ import { CharacterSelect } from "@/components/CharacterSelect";
 import { LiveMap, LiveList } from "@liveblocks/client";
 import { ClientSideSuspense } from "@liveblocks/react";
 
-type TaskItem   = { id: string; content: string };
+type TaskAssignee = { name: string; characterId: string; color: string };
+type TaskItem   = { id: string; content: string; assignedTo?: TaskAssignee };
 type ColumnType = { id: string; title: string; taskIds: string[] };
 type Stroke     = { points: { x: number; y: number }[]; color: string; width: number };
 type SaveFile   = { tasks: TaskItem[]; columns: ColumnType[]; columnOrder: string[] };
@@ -80,6 +81,11 @@ function BoardContent({ boardId }: { boardId: string }) {
   const editTask = useMutation(({ storage }, taskId: string, newContent: string) => {
     const existing = storage.get("tasks").get(taskId);
     if (existing) storage.get("tasks").set(taskId, { ...existing, content: newContent });
+  }, []);
+
+  const assignTask = useMutation(({ storage }, taskId: string, assignee: TaskAssignee | null) => {
+    const existing = storage.get("tasks").get(taskId);
+    if (existing) storage.get("tasks").set(taskId, { ...existing, assignedTo: assignee ?? undefined });
   }, []);
 
   const deleteTask = useMutation(({ storage }, taskId: string) => {
@@ -349,6 +355,7 @@ function BoardContent({ boardId }: { boardId: string }) {
                 onDeleteTask={deleteTask}
                 onEditTask={editTask}
                 onEditImage={handleEditImage}
+                onAssignTask={assignTask}
               />
             );
           })}
