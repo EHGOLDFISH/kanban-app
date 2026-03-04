@@ -10,9 +10,11 @@ interface ColumnProps {
   tasks: Task[];
   onAddTask: (columnId: string, content: string) => void;
   onDeleteTask: (taskId: string) => void;
+  onEditTask: (taskId: string, newContent: string) => void;
+  onEditImage: (taskId: string) => void;
 }
 
-export function Column({ column, tasks, onAddTask, onDeleteTask }: ColumnProps) {
+export function Column({ column, tasks, onAddTask, onDeleteTask, onEditTask, onEditImage }: ColumnProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [newTaskContent, setNewTaskContent] = useState("");
 
@@ -51,7 +53,7 @@ export function Column({ column, tasks, onAddTask, onDeleteTask }: ColumnProps) 
             }`}
           >
             {tasks.map((task, index) => (
-              <TaskCard key={task.id} task={task} index={index} onDelete={onDeleteTask} />
+              <TaskCard key={task.id} task={task} index={index} onDelete={onDeleteTask} onEdit={onEditTask} onEditImage={onEditImage} />
             ))}
             {provided.placeholder}
             

@@ -77,6 +77,11 @@ function BoardContent({ boardId }: { boardId: string }) {
     if (col) storage.get("columns").set(columnId, { ...col, taskIds: [...col.taskIds, taskId] });
   }, []);
 
+  const editTask = useMutation(({ storage }, taskId: string, newContent: string) => {
+    const existing = storage.get("tasks").get(taskId);
+    if (existing) storage.get("tasks").set(taskId, { ...existing, content: newContent });
+  }, []);
+
   const deleteTask = useMutation(({ storage }, taskId: string) => {
     storage.get("tasks").delete(taskId);
     for (const colId of Array.from(storage.get("columns").keys())) {
@@ -119,6 +124,26 @@ function BoardContent({ boardId }: { boardId: string }) {
     storage.get("tasks").set(taskId, { id: taskId, content: dataUrl });
     const col = storage.get("columns").get("column-1");
     if (col) storage.get("columns").set("column-1", { ...col, taskIds: [taskId, ...col.taskIds] });
+  }, []);
+
+  // ── Image task editing ─────────────────────────────────────────────────────
+  const [editingImageTaskId, setEditingImageTaskId] = useState<string | null>(null);
+
+  const handleEditImage = useCallback((taskId: string) => {
+    setEditingImageTaskId(taskId);
+  }, []);
+
+  const handleSaveNote = useCallback((dataUrl: string) => {
+    if (editingImageTaskId) {
+      editTask(editingImageTaskId, dataUrl);
+      setEditingImageTaskId(null);
+    } else {
+      addSketchAsNote(dataUrl);
+    }
+  }, [editingImageTaskId, editTask, addSketchAsNote]);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingImageTaskId(null);
   }, []);
 
   // ── Import mutation ────────────────────────────────────────────────────────
@@ -322,6 +347,8 @@ function BoardContent({ boardId }: { boardId: string }) {
                 tasks={columnTasks}
                 onAddTask={addTask}
                 onDeleteTask={deleteTask}
+                onEditTask={editTask}
+                onEditImage={handleEditImage}
               />
             );
           })}
@@ -329,7 +356,10 @@ function BoardContent({ boardId }: { boardId: string }) {
             strokes={strokesArr}
             onStrokeAdd={addStroke}
             onClear={clearStrokes}
-            onAddAsNote={addSketchAsNote}
+            onAddAsNote={handleSaveNote}
+            backgroundImage={editingImageTaskId ? tasksObj[editingImageTaskId]?.content : undefined}
+            isEditingNote={!!editingImageTaskId}
+            onCancelEdit={handleCancelEdit}
           />
         </div>
       </DragDropContext>

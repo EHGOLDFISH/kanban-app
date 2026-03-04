@@ -7,6 +7,9 @@ interface DrawingPanelProps {
   onStrokeAdd: (stroke: Stroke) => void;
   onClear: () => void;
   onAddAsNote?: (dataUrl: string) => void;
+  backgroundImage?: string;      // data URL to load as background (editing existing image task)
+  onCancelEdit?: () => void;     // called when user cancels editing an existing image
+  isEditingNote?: boolean;       // true when editing an existing image task
 }
 
 export interface Stroke {
@@ -15,23 +18,36 @@ export interface Stroke {
   width: number;
 }
 
-export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote }: DrawingPanelProps) {
+export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backgroundImage, onCancelEdit, isEditingNote }: DrawingPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState("#c9b896");
   const [lineWidth, setLineWidth] = useState(3);
   const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null);
+  const bgImgRef = useRef<HTMLImageElement | null>(null);
+
+  // Load background image into a ref so redraw can paint it
+  useEffect(() => {
+    if (!backgroundImage) { bgImgRef.current = null; return; }
+    const img = new Image();
+    img.onload = () => { bgImgRef.current = img; };
+    img.src = backgroundImage;
+  }, [backgroundImage]);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    
+
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    
+
     ctx.fillStyle = "#1a1612";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
+
+    if (bgImgRef.current) {
+      ctx.drawImage(bgImgRef.current, 0, 0, canvas.width, canvas.height);
+    }
+
     strokes.forEach((stroke) => {
       if (stroke.points.length < 2) return;
       ctx.strokeStyle = stroke.color;
@@ -108,7 +124,14 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote }: Dra
   return (
     <div className="flex flex-col flex-1 min-w-[300px] ml-6 h-[calc(100vh-140px)]">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="font-semibold text-[#c9b896] tracking-wide">Sketch Area</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="font-semibold text-[#c9b896] tracking-wide">Sketch Area</h2>
+          {isEditingNote && (
+            <span className="text-[10px] uppercase tracking-widest text-[#8b6914] border border-[#8b6914] px-1.5 py-0.5 rounded">
+              Editing
+            </span>
+          )}
+        </div>
         <button
           onClick={onClear}
           className="text-xs text-[#8b7355] hover:text-[#c9b896] transition-colors"
@@ -155,12 +178,22 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote }: Dra
       />
       
       {onAddAsNote && (
-        <button
-          onClick={handleAddAsNote}
-          className="mt-3 px-4 py-2 bg-[#8b6914] text-[#1a1612] rounded font-medium hover:bg-[#a67c16] transition-colors self-start"
-        >
-          + Add to Note
-        </button>
+        <div className="flex gap-2 mt-3">
+          <button
+            onClick={handleAddAsNote}
+            className="px-4 py-2 bg-[#8b6914] text-[#1a1612] rounded font-medium hover:bg-[#a67c16] transition-colors"
+          >
+            {isEditingNote ? "Update Note" : "+ Add to Note"}
+          </button>
+          {isEditingNote && onCancelEdit && (
+            <button
+              onClick={onCancelEdit}
+              className="px-4 py-2 text-[#8b7355] rounded border border-[#3d332a] hover:text-[#c9b896] hover:border-[#8b7355] transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
