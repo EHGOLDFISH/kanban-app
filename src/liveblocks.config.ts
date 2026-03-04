@@ -5,9 +5,16 @@ const client = createClient({
   publicApiKey: process.env.NEXT_PUBLIC_LIVEBLOCKS_PUBLIC_KEY!,
 });
 
+type TaskAssignee = {
+  name: string;
+  characterId: string;
+  color: string;
+};
+
 type TaskItem = {
   id: string;
   content: string;
+  assignedTo?: TaskAssignee;
 };
 
 type ColumnType = {
@@ -57,4 +64,4 @@ export const {
   useBroadcastEvent,
 } = createRoomContext<Presence, Storage, UserMeta, RoomEvent>(client);
 
-export type { TaskItem, ColumnType, Stroke, Presence };
+export type { TaskAssignee, TaskItem, ColumnType, Stroke, Presence };
