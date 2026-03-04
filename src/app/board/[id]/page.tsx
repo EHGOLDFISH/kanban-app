@@ -24,6 +24,27 @@ type ColumnType = { id: string; title: string; taskIds: string[] };
 type Stroke     = { points: { x: number; y: number }[]; color: string; width: number };
 type SaveFile   = { tasks: TaskItem[]; columns: ColumnType[]; columnOrder: string[] };
 
+// ─── Local cache helpers (localStorage) ──────────────────────────────────────
+// Liveblocks has storage size limits; store image content + assignee locally as fallback.
+function cacheImage(taskId: string, dataUrl: string) {
+  try { localStorage.setItem(`kimg_${taskId}`, dataUrl); } catch {}
+}
+function getCachedImage(taskId: string): string | null {
+  try { return localStorage.getItem(`kimg_${taskId}`); } catch { return null; }
+}
+function cacheAssignee(taskId: string, assignee: TaskAssignee | null) {
+  try {
+    if (assignee) localStorage.setItem(`kassignee_${taskId}`, JSON.stringify(assignee));
+    else localStorage.removeItem(`kassignee_${taskId}`);
+  } catch {}
+}
+function getCachedAssignee(taskId: string): TaskAssignee | null {
+  try {
+    const v = localStorage.getItem(`kassignee_${taskId}`);
+    return v ? JSON.parse(v) : null;
+  } catch { return null; }
+}
+
 // ─── Board content (inside RoomProvider) ─────────────────────────────────────
 
 function BoardContent({ boardId }: { boardId: string }) {
@@ -125,12 +146,17 @@ function BoardContent({ boardId }: { boardId: string }) {
     while (list.length > 0) list.delete(0);
   }, []);
 
-  const addSketchAsNote = useMutation(({ storage }, dataUrl: string) => {
-    const taskId = `task-${Date.now()}`;
+  const addSketchAsNote = useMutation(({ storage }, taskId: string, dataUrl: string) => {
     storage.get("tasks").set(taskId, { id: taskId, content: dataUrl });
     const col = storage.get("columns").get("column-1");
     if (col) storage.get("columns").set("column-1", { ...col, taskIds: [taskId, ...col.taskIds] });
   }, []);
+
+  // ── Assign task (with local cache so assignee survives Liveblocks size limits)
+  const handleAssignTask = useCallback((taskId: string, assignee: TaskAssignee | null) => {
+    cacheAssignee(taskId, assignee);
+    assignTask(taskId, assignee);
+  }, [assignTask]);
 
   // ── Image task editing ─────────────────────────────────────────────────────
   const [editingImageTaskId, setEditingImageTaskId] = useState<string | null>(null);
@@ -141,10 +167,13 @@ function BoardContent({ boardId }: { boardId: string }) {
 
   const handleSaveNote = useCallback((dataUrl: string) => {
     if (editingImageTaskId) {
+      cacheImage(editingImageTaskId, dataUrl);
       editTask(editingImageTaskId, dataUrl);
       setEditingImageTaskId(null);
     } else {
-      addSketchAsNote(dataUrl);
+      const taskId = `task-${Date.now()}`;
+      cacheImage(taskId, dataUrl);
+      addSketchAsNote(taskId, dataUrl);
     }
   }, [editingImageTaskId, editTask, addSketchAsNote]);
 
@@ -173,8 +202,22 @@ function BoardContent({ boardId }: { boardId: string }) {
 
   const handleExport = useCallback(() => {
     if (!tasks || !columns || !columnOrder) return;
+    // For image tasks, Liveblocks may have dropped the content due to size limits.
+    // Fall back to the locally cached copy when the stored content is missing/empty.
+    const taskList = Array.from(tasks.values()).map((t) => {
+      let task = t as TaskItem;
+      if (!task.content || task.content === "") {
+        const cached = getCachedImage(t.id);
+        if (cached) task = { ...task, content: cached };
+      }
+      if (!task.assignedTo) {
+        const cached = getCachedAssignee(t.id);
+        if (cached) task = { ...task, assignedTo: cached };
+      }
+      return task;
+    });
     const data: SaveFile = {
-      tasks:       Array.from(tasks.values()),
+      tasks:       taskList,
       columns:     Array.from(columns.values()),
       columnOrder: Array.from(columnOrder),
     };
@@ -199,6 +242,11 @@ function BoardContent({ boardId }: { boardId: string }) {
       try {
         const data = JSON.parse(ev.target?.result as string) as SaveFile;
         if (!data.tasks || !data.columns || !data.columnOrder) throw new Error("Invalid save file");
+        // Cache image content and assignees so they survive future exports
+        for (const t of data.tasks) {
+          if (t.content?.startsWith("data:image")) cacheImage(t.id, t.content);
+          if (t.assignedTo) cacheAssignee(t.id, t.assignedTo);
+        }
         importBoard(data);
       } catch {
         alert("Invalid save file. Please choose a valid DST Kanban save.");
@@ -355,7 +403,7 @@ function BoardContent({ boardId }: { boardId: string }) {
                 onDeleteTask={deleteTask}
                 onEditTask={editTask}
                 onEditImage={handleEditImage}
-                onAssignTask={assignTask}
+                onAssignTask={handleAssignTask}
               />
             );
           })}
