@@ -146,6 +146,11 @@ function BoardContent({ boardId }: { boardId: string }) {
     while (list.length > 0) list.delete(0);
   }, []);
 
+  const undoStroke = useMutation(({ storage }) => {
+    const list = storage.get("strokes");
+    if (list.length > 0) list.delete(list.length - 1);
+  }, []);
+
   const addSketchAsNote = useMutation(({ storage }, taskId: string, dataUrl: string) => {
     storage.get("tasks").set(taskId, { id: taskId, content: dataUrl });
     const col = storage.get("columns").get("column-1");
@@ -410,6 +415,7 @@ function BoardContent({ boardId }: { boardId: string }) {
           <DrawingPanel
             strokes={strokesArr}
             onStrokeAdd={addStroke}
+            onUndoStroke={undoStroke}
             onClear={clearStrokes}
             onAddAsNote={handleSaveNote}
             backgroundImage={editingImageTaskId ? tasksObj[editingImageTaskId]?.content : undefined}

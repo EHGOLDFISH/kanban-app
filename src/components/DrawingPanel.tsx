@@ -5,6 +5,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 interface DrawingPanelProps {
   strokes: Stroke[];
   onStrokeAdd: (stroke: Stroke) => void;
+  onUndoStroke: () => void;
   onClear: () => void;
   onAddAsNote?: (dataUrl: string) => void;
   backgroundImage?: string;
@@ -186,7 +187,7 @@ const TOOLS: { id: Tool; label: string; title: string; group: "draw" | "stamp" }
   { id: "stamp-chest", label: "Chest", title: "Place a chest",         group: "stamp" },
 ];
 
-export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backgroundImage, onCancelEdit, isEditingNote }: DrawingPanelProps) {
+export function DrawingPanel({ strokes, onStrokeAdd, onUndoStroke, onClear, onAddAsNote, backgroundImage, onCancelEdit, isEditingNote }: DrawingPanelProps) {
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const uploadRef  = useRef<HTMLInputElement>(null);
 
@@ -196,17 +197,28 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
   const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null);
   const [tool,          setTool]          = useState<Tool>("pen");
 
-  const bgImgRef      = useRef<HTMLImageElement | null>(null);
-  const [bgVersion,    setBgVersion]      = useState(0);
-  const [uploadedBg,   setUploadedBg]     = useState<string | null>(null);
+  const bgImgRef        = useRef<HTMLImageElement | null>(null);
+  const [bgVersion,     setBgVersion]      = useState(0);
+  const [uploadedBg,    setUploadedBg]     = useState<string | null>(null);
+  // History stack for undo of bg-mutating operations (fill, stamp, upload, clear)
+  const [bgHistory,     setBgHistory]      = useState<(string | null)[]>([]);
+  const uploadedBgRef   = useRef<string | null>(null);
+  useEffect(() => { uploadedBgRef.current = uploadedBg; }, [uploadedBg]);
+
   // Holds a frozen snapshot of the canvas while a new bg image is loading (prevents flash)
-  const frozenRef     = useRef<ImageData | null>(null);
-  const onClearRef    = useRef(onClear);
+  const frozenRef       = useRef<ImageData | null>(null);
+  const onClearRef      = useRef(onClear);
   useEffect(() => { onClearRef.current = onClear; }, [onClear]);
   const pendingClearRef = useRef(false);
+  // Set when restoring via undo so the bg-load effect doesn't clear strokes
+  const isUndoRestoreRef = useRef(false);
+
+  const pushBgHistory = useCallback(() => {
+    setBgHistory((h) => [...h.slice(-9), uploadedBgRef.current]); // cap at 10 entries
+  }, []);
 
   const activeBg = uploadedBg ?? backgroundImage ?? null;
-  useEffect(() => { setUploadedBg(null); }, [backgroundImage]);
+  useEffect(() => { setUploadedBg(null); setBgHistory([]); }, [backgroundImage]);
 
   // Load background image
   useEffect(() => {
@@ -214,12 +226,13 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
     const img = new Image();
     img.onload = () => {
       bgImgRef.current = img;
-      frozenRef.current = null; // bg loaded — release frozen snapshot
+      frozenRef.current = null;
       setBgVersion((v) => v + 1);
-      if (pendingClearRef.current) {
+      if (pendingClearRef.current && !isUndoRestoreRef.current) {
         pendingClearRef.current = false;
         onClearRef.current();
       }
+      isUndoRestoreRef.current = false;
     };
     img.src = activeBg;
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -230,10 +243,11 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
     const canvas = canvasRef.current;
     const ctx    = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
+    pushBgHistory();
     frozenRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
     pendingClearRef.current = true;
     setUploadedBg(canvas.toDataURL("image/png"));
-  }, []);
+  }, [pushBgHistory]);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -271,16 +285,7 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
 
   useEffect(() => { redraw(); }, [redraw]);
 
-  function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setUploadedBg(ev.target?.result as string);
-    reader.readAsDataURL(file);
-    e.target.value = "";
-  }
-
-  const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
+const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
@@ -334,7 +339,29 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
     onAddAsNote(canvas.toDataURL("image/png"));
   };
 
-  const hasLocalBg = !!uploadedBg;
+  function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => { pushBgHistory(); setUploadedBg(ev.target?.result as string); };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  function handleUndo() {
+    if (bgHistory.length > 0) {
+      const prev = bgHistory[bgHistory.length - 1];
+      setBgHistory((h) => h.slice(0, -1));
+      isUndoRestoreRef.current = true;
+      pendingClearRef.current  = false; // cancel any in-flight flatten clear
+      setUploadedBg(prev);
+    } else {
+      onUndoStroke();
+    }
+  }
+
+  const hasLocalBg  = !!uploadedBg;
+  const canUndo     = bgHistory.length > 0 || strokes.length > 0;
   const cursorStyle = tool === "pen" ? "crosshair" : tool === "fill" ? "cell" : "copy";
 
   const colors = ["#c9b896", "#ef4444", "#f97316", "#f59e0b", "#84cc16", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899"];
@@ -346,16 +373,16 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <h2 className="font-semibold text-[#c9b896] tracking-wide">Sketch Area</h2>
-          {(isEditingNote || hasLocalBg) && (
+          {isEditingNote && (
             <span className="text-[10px] uppercase tracking-widest text-[#8b6914] border border-[#8b6914] px-1.5 py-0.5 rounded">
-              {isEditingNote ? "Editing" : "Upload"}
+              Editing
             </span>
           )}
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={() => uploadRef.current?.click()} className="text-xs text-[#8b7355] hover:text-[#c9b896] transition-colors" title="Upload image">Upload</button>
+          <button onClick={() => uploadRef.current?.click()} className="text-xs text-[#8b7355] hover:text-[#c9b896] transition-colors" title="Upload image as background">Upload</button>
           <input ref={uploadRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
-          <button onClick={() => { setUploadedBg(null); onClear(); }} className="text-xs text-[#8b7355] hover:text-[#c9b896] transition-colors">Clear</button>
+          <button onClick={() => { pushBgHistory(); setUploadedBg(null); onClear(); }} className="text-xs text-[#8b7355] hover:text-[#c9b896] transition-colors">Clear</button>
         </div>
       </div>
 
@@ -383,10 +410,20 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
             </span>
           );
         })}
+        <span className="w-px h-5 bg-[#3d332a] mx-0.5" />
+        <button
+          onClick={handleUndo}
+          disabled={!canUndo}
+          title="Undo"
+          className="px-2.5 py-1 text-xs rounded border transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          style={{ backgroundColor: "#1a1410", borderColor: "#3d332a", color: "#5a4d3d" }}
+        >
+          Undo
+        </button>
       </div>
 
-      {/* Color + size row (only shown for pen tool) */}
-      <div className={`flex gap-2 mb-3 flex-wrap items-center transition-opacity ${tool !== "pen" ? "opacity-40 pointer-events-none" : ""}`}>
+      {/* Color + size row */}
+      <div className={`flex gap-2 mb-3 flex-wrap items-center transition-opacity ${tool.startsWith("stamp-") ? "opacity-40 pointer-events-none" : ""}`}>
         {colors.map((c) => (
           <button
             key={c}
@@ -396,18 +433,8 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
           />
         ))}
         <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="w-6 h-6 rounded cursor-pointer" />
-        <input type="range" min="1" max="20" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} className="w-20 ml-2" />
+        {tool === "pen" && <input type="range" min="1" max="20" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} className="w-20 ml-2" />}
       </div>
-      {/* Fill color swatch (shown for fill tool) */}
-      {tool === "fill" && (
-        <div className="flex gap-2 mb-3 flex-wrap items-center">
-          <span className="text-xs text-[#5a4d3d]">Fill color:</span>
-          {colors.map((c) => (
-            <button key={c} onClick={() => setColor(c)} className={`w-6 h-6 rounded-full border-2 ${color === c ? "border-white" : "border-transparent"}`} style={{ backgroundColor: c }} />
-          ))}
-          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="w-6 h-6 rounded cursor-pointer" />
-        </div>
-      )}
 
       <canvas
         ref={canvasRef}
