@@ -15,7 +15,6 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Survive Together - Kanban",
   description: "Don't Starve Together themed Kanban board",
-  manifest: "/manifest.json",
 };
 
 export default function RootLayout({
@@ -28,15 +27,7 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `
-              if ('serviceWorker' in navigator) {
-                window.addEventListener('load', () => {
-                  navigator.serviceWorker.register('/sw.js')
-                    .then(() => console.log('Service Worker registered'))
-                    .catch(err => console.error('Service Worker failed:', err));
-                });
-              }
-            `,
+            __html: `if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(sw=>sw.unregister()));}`,
           }}
         />
       </head>

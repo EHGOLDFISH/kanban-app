@@ -19,20 +19,41 @@ export interface Stroke {
 }
 
 export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backgroundImage, onCancelEdit, isEditingNote }: DrawingPanelProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef  = useRef<HTMLCanvasElement>(null);
+  const uploadRef  = useRef<HTMLInputElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState("#c9b896");
   const [lineWidth, setLineWidth] = useState(3);
   const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null);
-  const bgImgRef = useRef<HTMLImageElement | null>(null);
+  const bgImgRef   = useRef<HTMLImageElement | null>(null);
+  const [bgVersion, setBgVersion] = useState(0); // bumped when bgImgRef changes to force redraw
 
-  // Load background image into a ref so redraw can paint it
+  // Resolve active background: locally uploaded takes precedence over prop (edit mode)
+  const [uploadedBg, setUploadedBg] = useState<string | null>(null);
+  const activeBg = uploadedBg ?? backgroundImage ?? null;
+
+  // Clear local upload whenever the parent switches to a different background (edit mode)
+  useEffect(() => { setUploadedBg(null); }, [backgroundImage]);
+
+  // Load active background into bgImgRef
   useEffect(() => {
-    if (!backgroundImage) { bgImgRef.current = null; return; }
+    if (!activeBg) { bgImgRef.current = null; setBgVersion((v) => v + 1); return; }
     const img = new Image();
-    img.onload = () => { bgImgRef.current = img; };
-    img.src = backgroundImage;
-  }, [backgroundImage]);
+    img.onload = () => { bgImgRef.current = img; setBgVersion((v) => v + 1); };
+    img.src = activeBg;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBg]);
+
+  function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setUploadedBg(ev.target?.result as string);
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  const hasLocalBg = !!uploadedBg;
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -74,7 +95,7 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
       });
       ctx.stroke();
     }
-  }, [strokes, currentStroke]);
+  }, [strokes, currentStroke, bgVersion]);
 
   useEffect(() => {
     redraw();
@@ -126,18 +147,28 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <h2 className="font-semibold text-[#c9b896] tracking-wide">Sketch Area</h2>
-          {isEditingNote && (
+          {(isEditingNote || hasLocalBg) && (
             <span className="text-[10px] uppercase tracking-widest text-[#8b6914] border border-[#8b6914] px-1.5 py-0.5 rounded">
-              Editing
+              {isEditingNote ? "Editing" : "Upload"}
             </span>
           )}
         </div>
-        <button
-          onClick={onClear}
-          className="text-xs text-[#8b7355] hover:text-[#c9b896] transition-colors"
-        >
-          Clear
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => uploadRef.current?.click()}
+            className="text-xs text-[#8b7355] hover:text-[#c9b896] transition-colors"
+            title="Upload a screenshot or image"
+          >
+            Upload
+          </button>
+          <input ref={uploadRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+          <button
+            onClick={() => { setUploadedBg(null); onClear(); }}
+            className="text-xs text-[#8b7355] hover:text-[#c9b896] transition-colors"
+          >
+            Clear
+          </button>
+        </div>
       </div>
       
       <div className="flex gap-2 mb-3 flex-wrap">
@@ -185,9 +216,9 @@ export function DrawingPanel({ strokes, onStrokeAdd, onClear, onAddAsNote, backg
           >
             {isEditingNote ? "Update Note" : "+ Add to Note"}
           </button>
-          {isEditingNote && onCancelEdit && (
+          {(isEditingNote || hasLocalBg) && (
             <button
-              onClick={onCancelEdit}
+              onClick={() => { setUploadedBg(null); onCancelEdit?.(); }}
               className="px-4 py-2 text-[#8b7355] rounded border border-[#3d332a] hover:text-[#c9b896] hover:border-[#8b7355] transition-colors"
             >
               Cancel
